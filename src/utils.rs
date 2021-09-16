@@ -13,11 +13,11 @@
 //
 
 use async_std::fs;
-use async_std::prelude::*;
-use memmap2::MmapOptions;
 use async_std::fs::File;
-use std::path::Path;
+use async_std::prelude::*;
 use async_std::{fs::OpenOptions, io::SeekFrom};
+use memmap2::MmapOptions;
+use std::path::Path;
 use zenoh::{ZError, ZErrorKind, ZResult};
 
 pub async fn get_bytes_from_file(
