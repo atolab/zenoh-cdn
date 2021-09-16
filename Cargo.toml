@@ -36,7 +36,7 @@ clap = "2"
 log = "0.4"
 env_logger = "0.9.0"
 checksums = "0.9.0"
-memmap2 = "0.3.1"
+memmap2 = { git = "https://github.com/gabrik/memmap2-rs.git", branch = "master",  features = ["async"]}
 serde_derive = "1.0.55"
 serde = { version = "1.0.55", features = ["derive"] }
 serde_json = "1.0.66"

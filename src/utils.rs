@@ -15,11 +15,9 @@
 use async_std::fs;
 use async_std::prelude::*;
 use memmap2::MmapOptions;
-use std::fs::File;
-use std::io::Read;
-use std::io::Seek;
+use async_std::fs::File;
 use std::path::Path;
-use std::{fs::OpenOptions, io::SeekFrom};
+use async_std::{fs::OpenOptions, io::SeekFrom};
 use zenoh::{ZError, ZErrorKind, ZResult};
 
 pub async fn get_bytes_from_file(
@@ -32,7 +30,7 @@ pub async fn get_bytes_from_file(
         filename,
         chunk_number
     );
-    let mut f = File::open(&filename).map_err(|e| {
+    let mut f = File::open(&filename).await.map_err(|e| {
         zenoh_util::zerror2!(ZErrorKind::Other {
             descr: format!("File not found {:?} {:?}", filename, e)
         })
@@ -46,7 +44,7 @@ pub async fn get_bytes_from_file(
     let file_size = metadata.len() as usize;
 
     let offset: usize = chunk_number * chunk_size;
-    let real_offset = f.seek(SeekFrom::Start(offset as u64));
+    let real_offset = f.seek(SeekFrom::Start(offset as u64)).await;
     log::trace!(
         "The offset I'd like is {} and the real offset is {:?}.",
         offset,
@@ -62,7 +60,7 @@ pub async fn get_bytes_from_file(
         buffer_len
     );
     let mut buffer = vec![0; buffer_len];
-    f.read_exact(&mut buffer).map_err(|e| {
+    f.read_exact(&mut buffer).await.map_err(|e| {
         zenoh_util::zerror2!(ZErrorKind::Other {
             descr: format!("Unable to read from file {:?} {:?}", filename, e)
         })
@@ -114,13 +112,14 @@ pub async fn create_destination_file(filename: &Path, size: u64) -> ZResult<File
         .write(true)
         .create(true)
         .open(filename)
+        .await
         .map_err(|e| {
             zenoh_util::zerror2!(ZErrorKind::Other {
                 descr: format!("Unable to create file {:?} {:?}", filename, e)
             })
         })?;
 
-    f.set_len(size).map_err(|e| {
+    f.set_len(size).await.map_err(|e| {
         zenoh_util::zerror2!(ZErrorKind::Other {
             descr: format!("Unable to allocate space in file {:?} {:?}", filename, e)
         })
@@ -162,7 +161,7 @@ pub async fn read_file_to_string(path: &Path) -> ZResult<String> {
 }
 
 pub async fn read_file_to_vec(path: &Path) -> ZResult<Vec<u8>> {
-    let mut f = File::open(&path).map_err(|e| {
+    let mut f = File::open(&path).await.map_err(|e| {
         zenoh_util::zerror2!(ZErrorKind::Other {
             descr: format!("Unable to open file {:?} {:?}", path, e)
         })
@@ -173,7 +172,7 @@ pub async fn read_file_to_vec(path: &Path) -> ZResult<Vec<u8>> {
         })
     })?;
     let mut buffer = vec![0; metadata.len() as usize];
-    f.read(&mut buffer).map_err(|e| {
+    f.read(&mut buffer).await.map_err(|e| {
         zenoh_util::zerror2!(ZErrorKind::Other {
             descr: format!(
                 "Buffer overflow when reading data from file {:?} {:?}",
