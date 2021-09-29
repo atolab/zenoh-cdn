@@ -17,6 +17,7 @@ use crate::{FILE_CHUNK_PATH, FILE_METADATA_PATH};
 use crate::types::{FileMetadata, DEFAULT_CHUNK_SIZE, DEFAULT_ROOT};
 use crate::utils::{create_destination_file, get_bytes_from_file, write_destination_file};
 use async_std::fs;
+use async_std::path::PathBuf;
 use async_std::prelude::*;
 use async_std::sync::Arc;
 use std::convert::TryFrom;
@@ -41,7 +42,7 @@ impl Client {
 
     /// Uploads a file to Zenoh-CDN.
     ///
-    pub async fn upload(&self, file_path: &Path, resource_name: &ZPath) -> ZResult<()> {
+    pub async fn upload(&self, file_path: &Path, resource_name: &ZPath) -> ZResult<ZPath> {
         let filename = match file_path.file_name() {
             Some(name) => Ok(name.to_str().unwrap().to_string()),
             None => Err(zerror2!(ZErrorKind::Other {
@@ -81,10 +82,10 @@ impl Client {
         let value = zenoh::Value::Json(data);
         ws.put(&path, value).await?;
 
-        Ok(())
+        Ok(path)
     }
 
-    pub async fn download(&self, resource_name: &ZPath, destination: &Path) -> ZResult<()> {
+    pub async fn download(&self, resource_name: &ZPath, destination: &Path) -> ZResult<PathBuf> {
         let ws = self.z.workspace(None).await?;
         let selector = Selector::try_from(FILE_METADATA_PATH!(DEFAULT_ROOT, resource_name))?;
         let metadata = {
@@ -155,6 +156,6 @@ impl Client {
             write_destination_file(&destination_file, &data, i, metadata.chunk_size).await?;
         }
 
-        Ok(())
+        Ok(destination.into())
     }
 }

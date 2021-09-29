@@ -63,14 +63,16 @@ async fn main() {
     match args {
         ClientCLI::Upload(up) => {
             let resource_name = zenoh::Path::try_from(up.resource_path).unwrap();
-            client.upload(&up.filename, &resource_name).await.unwrap();
+            let path = client.upload(&up.filename, &resource_name).await.unwrap();
+            println!("File uploaded to {:?}", path);
         }
         ClientCLI::Download(down) => {
             let resource_name = zenoh::Path::try_from(down.resource_path).unwrap();
-            client
+            let path = client
                 .download(&resource_name, &down.destination_path)
                 .await
                 .unwrap();
+            println!("File downloaded to: {:?}", path);
         }
     }
 }
