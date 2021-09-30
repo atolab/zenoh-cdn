@@ -18,7 +18,7 @@ use async_std::prelude::*;
 use async_std::{fs::OpenOptions, io::SeekFrom};
 use memmap2::MmapOptions;
 use std::path::Path;
-use zenoh::{ZError, ZErrorKind, ZResult};
+use zenoh_util::core::{ZError, ZErrorKind, ZResult};
 
 pub async fn get_bytes_from_file(
     filename: &Path,

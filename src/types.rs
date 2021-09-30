@@ -14,7 +14,7 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use zenoh::{ZError, ZErrorKind, ZResult};
+use zenoh_util::core::{ZError, ZErrorKind, ZResult};
 
 pub static FILES_KEY: &str = "files";
 pub static METADATA_KEY: &str = "metadata";

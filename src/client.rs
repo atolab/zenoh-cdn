@@ -20,10 +20,9 @@ use async_std::fs;
 use async_std::path::PathBuf;
 use async_std::prelude::*;
 use async_std::sync::Arc;
-use std::convert::TryFrom;
 use std::path::Path;
-use zenoh::{Path as ZPath, Selector};
-use zenoh::{ZError, ZErrorKind, ZResult, Zenoh};
+use zenoh::query::Reply;
+use zenoh::{prelude::*, Session};
 use zenoh_util::{zerror, zerror2};
 
 pub fn hash(filename: &Path) -> String {
@@ -32,17 +31,17 @@ pub fn hash(filename: &Path) -> String {
 
 #[derive(Clone)]
 pub struct Client {
-    pub z: Arc<Zenoh>,
+    pub z: Arc<Session>,
 }
 
 impl Client {
-    pub fn new(z: Arc<Zenoh>) -> Self {
+    pub fn new(z: Arc<Session>) -> Self {
         Self { z }
     }
 
     /// Uploads a file to Zenoh-CDN.
     ///
-    pub async fn upload(&self, file_path: &Path, resource_name: &ZPath) -> ZResult<ZPath> {
+    pub async fn upload(&self, file_path: &Path, resource_name: &str) -> ZResult<String> {
         let filename = match file_path.file_name() {
             Some(name) => Ok(name.to_str().unwrap().to_string()),
             None => Err(zerror2!(ZErrorKind::Other {
@@ -64,48 +63,55 @@ impl Client {
             checksum,
             chunk_size: DEFAULT_CHUNK_SIZE,
             chunks,
-            resource_name: String::from(resource_name.as_str()),
+            resource_name: resource_name.to_string(),
             size: file_metadata.len(),
         };
 
-        let ws = self.z.workspace(None).await?;
-
         for i in 0..chunks {
             let data = get_bytes_from_file(file_path, i, DEFAULT_CHUNK_SIZE).await?;
-            let path = ZPath::try_from(FILE_CHUNK_PATH!(DEFAULT_ROOT, resource_name, i))?;
-            ws.put(&path, data.into()).await?;
+            let path = FILE_CHUNK_PATH!(DEFAULT_ROOT, resource_name, i);
+            let value = Value::new(data.into()).encoding(Encoding::APP_OCTET_STREAM);
+            self.z.put(&path, value).await?;
         }
 
-        let path = ZPath::try_from(FILE_METADATA_PATH!(DEFAULT_ROOT, resource_name))?;
+        let path = FILE_METADATA_PATH!(DEFAULT_ROOT, resource_name);
         let data = metadata.serialize()?;
-
-        let value = zenoh::Value::Json(data);
-        ws.put(&path, value).await?;
+        let value = Value::new(data.as_bytes().into()).encoding(Encoding::APP_JSON);
+        self.z.put(&path, value).await?;
 
         Ok(path)
     }
 
-    pub async fn download(&self, resource_name: &ZPath, destination: &Path) -> ZResult<PathBuf> {
-        let ws = self.z.workspace(None).await?;
-        let selector = Selector::try_from(FILE_METADATA_PATH!(DEFAULT_ROOT, resource_name))?;
+    pub async fn download(&self, resource_name: &str, destination: &Path) -> ZResult<PathBuf> {
+        let selector = FILE_METADATA_PATH!(DEFAULT_ROOT, resource_name);
         let metadata = {
-            let ds = ws.get(&selector).await?;
+            let ds = self.z.get(&selector).await?;
 
             // Not sure this is needed...
-            let data = ds.collect::<Vec<zenoh::Data>>().await;
+            let mut data = ds.collect::<Vec<Reply>>().await;
 
             match data.len() {
                 0 => zerror!(ZErrorKind::Other {
                     descr: format!("File not found {:?}", resource_name)
                 }),
                 1 => {
-                    let kv = &data[0];
-                    match &kv.value {
-                        zenoh::Value::Json(value) => Ok(FileMetadata::deserialize(value)?),
+                    let reply = data.remove(0);
+                    let sample = reply.data;
+                    match sample.value.encoding.prefix {
+                        5 => {
+                            //Encoding::APP_JSON => {
+                            let value =
+                                String::from_utf8(sample.value.payload.to_vec()).map_err(|e| {
+                                    zerror2!(ZErrorKind::Other {
+                                        descr: format!("Malformed metadata {:?}", e)
+                                    })
+                                })?;
+                            Ok(FileMetadata::deserialize(&value)?)
+                        }
                         _ => zerror!(ZErrorKind::Other {
                             descr: format!(
                                 "Metadata is not correctly formatted {:?} - {:?}",
-                                resource_name, kv
+                                resource_name, sample
                             )
                         }),
                     }
@@ -122,25 +128,26 @@ impl Client {
         let destination_file = create_destination_file(destination, metadata.size).await?;
 
         for i in 0..metadata.chunks {
-            let selector = Selector::try_from(FILE_CHUNK_PATH!(DEFAULT_ROOT, resource_name, i))?;
-            let data = {
-                let ds = ws.get(&selector).await?;
+            let selector = FILE_CHUNK_PATH!(DEFAULT_ROOT, resource_name, i);
+            let data: Vec<u8> = {
+                let ds = self.z.get(&selector).await?;
 
                 // Not sure this is needed...
-                let data = ds.collect::<Vec<zenoh::Data>>().await;
+                let mut data = ds.collect::<Vec<Reply>>().await;
 
                 match data.len() {
                     0 => zerror!(ZErrorKind::Other {
                         descr: format!("File not found {:?}", resource_name)
                     }),
                     1 => {
-                        let kv = &data[0];
-                        match &kv.value {
-                            zenoh::Value::Raw(_, buf) => Ok(buf.to_vec()),
+                        let reply = data.remove(0);
+                        let sample = reply.data;
+                        match sample.value.encoding.prefix {
+                            1 => Ok(sample.value.payload.to_vec()), //Encoding::APP_OCTET_STREAM => Ok(sample.value.payload.to_vec()),
                             _ => zerror!(ZErrorKind::Other {
                                 descr: format!(
                                     "File data format is not correctly formatted {:?} - {:?}",
-                                    resource_name, kv
+                                    resource_name, sample
                                 )
                             }),
                         }

@@ -28,11 +28,11 @@ use async_std::task::JoinHandle;
 use futures::prelude::*;
 use futures::select;
 use futures::StreamExt;
-use std::convert::TryFrom;
 use std::path::Path;
+use zenoh::queryable::EVAL;
 
-use zenoh::{Change, ChangeKind, GetRequest, Value, ZError, ZErrorKind, ZResult, Zenoh};
-use zenoh::{Path as ZPath, PathExpr, Selector};
+use zenoh::queryable::Query;
+use zenoh::{prelude::*, Session};
 use zenoh_util::{zerror, zerror2};
 
 pub fn hash(filename: &Path) -> String {
@@ -41,12 +41,12 @@ pub fn hash(filename: &Path) -> String {
 
 #[derive(Clone)]
 pub struct Server {
-    pub z: Arc<Zenoh>,
+    pub z: Arc<Session>,
     pub config: ServerConfig,
 }
 
 impl Server {
-    pub fn new(z: Arc<Zenoh>, config: ServerConfig) -> Self {
+    pub fn new(z: Arc<Session>, config: ServerConfig) -> Self {
         Self { z, config }
     }
 
@@ -57,10 +57,6 @@ impl Server {
     }
 
     pub async fn run(&self) -> ZResult<()> {
-        let ws = self.z.workspace(None).await?;
-
-        let resource_space = Selector::try_from(self.config.resource_space.clone())?;
-
         let _resource_prefix = format!(
             "{}/{}",
             self.config
@@ -71,14 +67,16 @@ impl Server {
             FILES_KEY
         );
 
-        let mut change_stream = ws.subscribe(&resource_space).await?;
-        let mut get_stream = ws
-            .register_eval(&PathExpr::try_from(self.config.resource_space.clone())?)
+        let mut subscriber = self.z.subscribe(&self.config.resource_space).await?;
+        let mut queryable = self
+            .z
+            .register_queryable(&self.config.resource_space)
+            .kind(EVAL)
             .await?;
 
         loop {
             select! {
-                sample = change_stream.next().fuse() => {
+                sample = subscriber.receiver().next().fuse() => {
 
                     match self.process_sample(sample).await {
                         Ok(_) => (),
@@ -86,7 +84,7 @@ impl Server {
                     }
 
                 }
-                query = get_stream.next().fuse() => {
+                query = queryable.receiver().next().fuse() => {
                     match self.process_query(query).await {
                         Ok(_) => (),
                         Err(e) => log::error!("Process file retrieve failed: {:?}",e ),
@@ -96,7 +94,7 @@ impl Server {
         }
     }
 
-    async fn process_query(&self, query: Option<GetRequest>) -> ZResult<()> {
+    async fn process_query(&self, query: Option<Query>) -> ZResult<()> {
         let resource_prefix = format!(
             "{}/{}",
             self.config
@@ -114,18 +112,19 @@ impl Server {
             }),
         }?;
 
-        match query.selector.path_expr.is_a_path() {
-            false => zerror!(ZErrorKind::Other {
-                descr: format!("Malformend query {:?}", query.selector)
-            }),
-            _ => Ok(()),
-        }?;
-        let query_path = query.selector.path_expr.as_str();
+        // match query.selector().path_expr.is_a_path() {
+        //     false => zerror!(ZErrorKind::Other {
+        //         descr: format!("Malformend query {:?}", query.selector)
+        //     }),
+        //     _ => Ok(()),
+        // }?;
+
+        let query_path = query.selector().key_selector;
 
         log::debug!("Received query {:?}", query_path);
         let complete_path = extract_complete_file_path(&resource_prefix, query_path)?;
 
-        let resp: Value = match extract_chunk_number(&complete_path) {
+        let resp: Sample = match extract_chunk_number(&complete_path) {
             Err(_) => {
                 log::debug!("Getting metadata");
                 let hashed_path = hash_path(&complete_path);
@@ -136,7 +135,8 @@ impl Server {
                     metadata_path
                 );
                 let metadata = read_file_to_string(&metadata_path).await?;
-                Value::Json(metadata)
+                let value = Value::new(metadata.as_bytes().into()).encoding(Encoding::APP_JSON);
+                Sample::new(query_path.to_string(), value)
             }
             Ok(chunk_number) => {
                 log::debug!("Getting chunk");
@@ -155,15 +155,16 @@ impl Server {
                     chunk_path
                 );
                 let data = read_file_to_vec(&chunk_path).await?;
-                data.into()
+                let value = Value::new(data.into()).encoding(Encoding::APP_OCTET_STREAM);
+                Sample::new(query_path.to_string(), value)
             }
         };
 
-        query.reply_async(ZPath::try_from(query_path)?, resp).await;
+        query.reply_async(resp).await;
         Ok(())
     }
 
-    async fn process_sample(&self, sample: Option<Change>) -> ZResult<()> {
+    async fn process_sample(&self, sample: Option<Sample>) -> ZResult<()> {
         let resource_prefix = format!(
             "{}/{}",
             self.config
@@ -180,69 +181,67 @@ impl Server {
                 descr: "Subscriber received nothing".to_string(),
             }),
         }?;
-        log::debug!("Received data from {:?}", sample.path);
+        log::debug!("Received data from {:?}", sample.res_name);
         match sample.kind {
-            ChangeKind::Put | ChangeKind::Patch => {
-                let value = sample.value.ok_or_else(|| {
-                    zerror2!(ZErrorKind::Other {
-                        descr: "Sample is missing value".to_string(),
-                    })
-                })?;
+            SampleKind::Put | SampleKind::Patch => match sample.value.encoding.prefix {
+                1 => {
+                    //Encoding::APP_OCTET_STREAM => {
+                    let data = sample.value.payload.to_vec();
+                    log::debug!("Received {:?} bytes", data.len());
 
-                match value {
-                    Value::Raw(_, buf) => {
-                        let data = buf.to_vec();
-                        log::debug!("Received {:?} bytes", data.len());
+                    let path = extract_file_path(&resource_prefix, &sample.res_name)?;
+                    let chunk_number = extract_chunk_number(&sample.res_name)?;
+                    let hashed_path = hash_path(&path);
 
-                        let path = extract_file_path(&resource_prefix, sample.path.as_str())?;
-                        let chunk_number = extract_chunk_number(sample.path.as_str())?;
-                        let hashed_path = hash_path(&path);
+                    let complete_path = self.config.chunks_dir.join(&hashed_path);
 
-                        let complete_path = self.config.chunks_dir.join(&hashed_path);
+                    log::debug!(
+                        "Received {:?} Chunk {:?} - Hashed {:?} - Going to be stored in {:?}",
+                        path,
+                        chunk_number,
+                        hashed_path,
+                        complete_path
+                    );
 
-                        log::debug!(
-                            "Received {:?} Chunk {:?} - Hashed {:?} - Going to be stored in {:?}",
-                            path,
-                            chunk_number,
-                            hashed_path,
-                            complete_path
-                        );
+                    create_dir_if_not_exists(&complete_path).await?;
 
-                        create_dir_if_not_exists(&complete_path).await?;
+                    let chunk_path = complete_path.join(&format!("{}", chunk_number));
 
-                        let chunk_path = complete_path.join(&format!("{}", chunk_number));
-
-                        log::debug!(
-                            "Received {:?} Chunk {:?} - Hashed {:?} - Going to be stored in {:?}",
-                            path,
-                            chunk_number,
-                            hashed_path,
-                            chunk_path
-                        );
-                        Ok(write_chunk_file(&chunk_path, &data).await?)
-                    }
-                    Value::Json(value) => {
-                        let metadata = FileMetadata::deserialize(&value)?;
-                        let path = metadata.resource_name.clone();
-                        let hashed_path = hash_path(&path);
-                        let metadata_path =
-                            self.config.chunks_dir.join(&hashed_path).join("metadata");
-
-                        log::debug!(
-                            "Received Metadata {:?} - Going to be stored in {:?}",
-                            metadata,
-                            metadata_path
-                        );
-
-                        Ok(write_metadata_file(&metadata_path, &value).await?)
-                    }
-                    _ => {
-                        log::error!("Subscriber received data not correctly formatted");
-                        Ok(())
-                    }
+                    log::debug!(
+                        "Received {:?} Chunk {:?} - Hashed {:?} - Going to be stored in {:?}",
+                        path,
+                        chunk_number,
+                        hashed_path,
+                        chunk_path
+                    );
+                    Ok(write_chunk_file(&chunk_path, &data).await?)
                 }
-            }
-            ChangeKind::Delete => {
+                5 => {
+                    //Encoding::APP_JSON => {
+                    let value = String::from_utf8(sample.value.payload.to_vec()).map_err(|e| {
+                        zerror2!(ZErrorKind::Other {
+                            descr: format!("Malformend metadata {:?}", e)
+                        })
+                    })?;
+                    let metadata = FileMetadata::deserialize(&value)?;
+                    let path = metadata.resource_name.clone();
+                    let hashed_path = hash_path(&path);
+                    let metadata_path = self.config.chunks_dir.join(&hashed_path).join("metadata");
+
+                    log::debug!(
+                        "Received Metadata {:?} - Going to be stored in {:?}",
+                        metadata,
+                        metadata_path
+                    );
+
+                    Ok(write_metadata_file(&metadata_path, &value).await?)
+                }
+                _ => {
+                    log::error!("Subscriber received data not correctly formatted");
+                    Ok(())
+                }
+            },
+            SampleKind::Delete => {
                 //We should delete the chunk in this case.
                 log::trace!("We should delete the chunk");
                 Ok(())

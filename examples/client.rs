@@ -13,9 +13,8 @@
 //
 
 use async_std::sync::Arc;
-use std::convert::TryFrom;
 use structopt::StructOpt;
-use zenoh::{Properties, Zenoh};
+use zenoh::prelude::*;
 use zenoh_cdn::client::Client;
 
 #[derive(StructOpt, Debug)]
@@ -48,28 +47,23 @@ async fn main() {
     log::debug!("Args: {:?}", args);
 
     let zsession = Arc::new(
-        Zenoh::new(
-            Properties::from(String::from(
-                // "mode=peer;listener=unixsock-stream//tmp/zf-registry.sock,tcp/127.0.0.1:8998",
-                "mode=peer",
-            ))
-            .into(),
-        )
-        .await
-        .unwrap(),
+        zenoh::open(Properties::from(String::from("mode=peer")))
+            .await
+            .unwrap(),
     );
     let client = Client::new(zsession);
 
     match args {
         ClientCLI::Upload(up) => {
-            let resource_name = zenoh::Path::try_from(up.resource_path).unwrap();
-            let path = client.upload(&up.filename, &resource_name).await.unwrap();
+            let path = client
+                .upload(&up.filename, &up.resource_path)
+                .await
+                .unwrap();
             println!("File uploaded to {:?}", path);
         }
         ClientCLI::Download(down) => {
-            let resource_name = zenoh::Path::try_from(down.resource_path).unwrap();
             let path = client
-                .download(&resource_name, &down.destination_path)
+                .download(&down.resource_path, &down.destination_path)
                 .await
                 .unwrap();
             println!("File downloaded to: {:?}", path);

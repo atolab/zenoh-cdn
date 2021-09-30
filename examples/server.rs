@@ -14,7 +14,7 @@
 
 use async_std::fs;
 use async_std::sync::Arc;
-use zenoh::{Properties, Zenoh};
+use zenoh::prelude::*;
 use zenoh_cdn::server::Server;
 use zenoh_cdn::types::ServerConfig;
 
@@ -27,11 +27,12 @@ async fn main() {
     env_logger::init();
 
     let args: Vec<String> = std::env::args().collect();
-
     let zsession = Arc::new(
-        Zenoh::new(Properties::from(String::from("mode=peer;listener=tcp/0.0.0.0:8998")).into())
-            .await
-            .unwrap(),
+        zenoh::open(Properties::from(String::from(
+            "mode=peer;listener=tcp/0.0.0.0:8998",
+        )))
+        .await
+        .unwrap(),
     );
 
     let config = args[1].clone();
