@@ -33,11 +33,15 @@ pub fn hash(filename: &Path) -> String {
 #[derive(Clone)]
 pub struct Client {
     pub z: Arc<Zenoh>,
+    pub root: String,
 }
 
 impl Client {
-    pub fn new(z: Arc<Zenoh>) -> Self {
-        Self { z }
+    pub fn new(z: Arc<Zenoh>, root: Option<String>) -> Self {
+        Self {
+            z,
+            root: root.unwrap_or_else(|| String::from(DEFAULT_ROOT)),
+        }
     }
 
     /// Uploads a file to Zenoh-CDN.
@@ -72,11 +76,11 @@ impl Client {
 
         for i in 0..chunks {
             let data = get_bytes_from_file(file_path, i, DEFAULT_CHUNK_SIZE).await?;
-            let path = ZPath::try_from(FILE_CHUNK_PATH!(DEFAULT_ROOT, resource_name, i))?;
+            let path = ZPath::try_from(FILE_CHUNK_PATH!(self.root, resource_name, i))?;
             ws.put(&path, data.into()).await?;
         }
 
-        let path = ZPath::try_from(FILE_METADATA_PATH!(DEFAULT_ROOT, resource_name))?;
+        let path = ZPath::try_from(FILE_METADATA_PATH!(self.root, resource_name))?;
         let data = metadata.serialize()?;
 
         let value = zenoh::Value::Json(data);
@@ -87,7 +91,7 @@ impl Client {
 
     pub async fn download(&self, resource_name: &ZPath, destination: &Path) -> ZResult<PathBuf> {
         let ws = self.z.workspace(None).await?;
-        let selector = Selector::try_from(FILE_METADATA_PATH!(DEFAULT_ROOT, resource_name))?;
+        let selector = Selector::try_from(FILE_METADATA_PATH!(self.root, resource_name))?;
         let metadata = {
             let ds = ws.get(&selector).await?;
 
@@ -122,7 +126,7 @@ impl Client {
         let destination_file = create_destination_file(destination, metadata.size).await?;
 
         for i in 0..metadata.chunks {
-            let selector = Selector::try_from(FILE_CHUNK_PATH!(DEFAULT_ROOT, resource_name, i))?;
+            let selector = Selector::try_from(FILE_CHUNK_PATH!(self.root, resource_name, i))?;
             let data = {
                 let ds = ws.get(&selector).await?;
 

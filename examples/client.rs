@@ -17,6 +17,7 @@ use std::convert::TryFrom;
 use structopt::StructOpt;
 use zenoh::{Properties, Zenoh};
 use zenoh_cdn::client::Client;
+use zenoh_cdn::types::DEFAULT_ROOT;
 
 #[derive(StructOpt, Debug)]
 pub struct UploadKind {
@@ -50,7 +51,6 @@ async fn main() {
     let zsession = Arc::new(
         Zenoh::new(
             Properties::from(String::from(
-                // "mode=peer;listener=unixsock-stream//tmp/zf-registry.sock,tcp/127.0.0.1:8998",
                 "mode=peer",
             ))
             .into(),
@@ -58,7 +58,7 @@ async fn main() {
         .await
         .unwrap(),
     );
-    let client = Client::new(zsession);
+    let client = Client::new(zsession, Some(DEFAULT_ROOT.to_string()));
 
     match args {
         ClientCLI::Upload(up) => {
