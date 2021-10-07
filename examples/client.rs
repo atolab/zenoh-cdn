@@ -51,7 +51,7 @@ async fn main() {
             .await
             .unwrap(),
     );
-    let client = Client::new(zsession);
+    let client = Client::new(zsession, None);
 
     match args {
         ClientCLI::Upload(up) => {

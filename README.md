@@ -1,6 +1,6 @@
 <img src="http://zenoh.io/img/zenoh-dragon-small.png" width="150">
 
-[![CI](https://github.com/atolab/zenoh-cdn/actions/workflows/ci.yml/badge.svg)](https://github.com/Alez87/zenoh-fragmentation-e2e/actions/workflows/ci.yml)
+[![CI](https://github.com/atolab/zenoh-cdn/actions/workflows/ci.yml/badge.svg)](https://github.com/atolab/zenoh-cdn/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/License-EPL%202.0-blue)](https://choosealicense.com/licenses/epl-2.0/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 

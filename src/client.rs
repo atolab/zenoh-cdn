@@ -32,11 +32,15 @@ pub fn hash(filename: &Path) -> String {
 #[derive(Clone)]
 pub struct Client {
     pub z: Arc<Session>,
+    pub root: String,
 }
 
 impl Client {
-    pub fn new(z: Arc<Session>) -> Self {
-        Self { z }
+    pub fn new(z: Arc<Session>, root: Option<String>) -> Self {
+        Self {
+            z,
+            root: root.unwrap_or_else(|| String::from(DEFAULT_ROOT)),
+        }
     }
 
     /// Uploads a file to Zenoh-CDN.
@@ -69,12 +73,12 @@ impl Client {
 
         for i in 0..chunks {
             let data = get_bytes_from_file(file_path, i, DEFAULT_CHUNK_SIZE).await?;
-            let path = FILE_CHUNK_PATH!(DEFAULT_ROOT, resource_name, i);
+            let path = FILE_CHUNK_PATH!(self.root, resource_name, i);
             let value = Value::new(data.into()).encoding(Encoding::APP_OCTET_STREAM);
             self.z.put(&path, value).await?;
         }
 
-        let path = FILE_METADATA_PATH!(DEFAULT_ROOT, resource_name);
+        let path = FILE_METADATA_PATH!(self.root, resource_name);
         let data = metadata.serialize()?;
         let value = Value::new(data.as_bytes().into()).encoding(Encoding::APP_JSON);
         self.z.put(&path, value).await?;
@@ -83,7 +87,7 @@ impl Client {
     }
 
     pub async fn download(&self, resource_name: &str, destination: &Path) -> ZResult<PathBuf> {
-        let selector = FILE_METADATA_PATH!(DEFAULT_ROOT, resource_name);
+        let selector = FILE_METADATA_PATH!(self.root, resource_name);
         let metadata = {
             let ds = self.z.get(&selector).await?;
 
@@ -128,7 +132,7 @@ impl Client {
         let destination_file = create_destination_file(destination, metadata.size).await?;
 
         for i in 0..metadata.chunks {
-            let selector = FILE_CHUNK_PATH!(DEFAULT_ROOT, resource_name, i);
+            let selector = FILE_CHUNK_PATH!(self.root, resource_name, i);
             let data: Vec<u8> = {
                 let ds = self.z.get(&selector).await?;
 
